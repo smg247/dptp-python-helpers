@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 
 import pandas
 from slack_sdk import WebClient
@@ -38,31 +39,43 @@ class Message:
         return [self.user, self.bot_id, self.reply_count, self.reply_users_count, self.month, self.day, self.year]
 
 
-def retrieve_messages(month) -> []:
-    first_day = datetime(month.year, month.month, 1)
-    some_day_next_month = first_day + timedelta(days=32)
-    last_day = datetime(some_day_next_month.year, some_day_next_month.month, 1)
-
+def retrieve_messages(month=None, beginning_from=None) -> []:
+    if month:
+        first_day = datetime(month.year, month.month, 1)
+        some_day_next_month = first_day + timedelta(days=32)
+        last_day = datetime(some_day_next_month.year, some_day_next_month.month, 1)
+    elif beginning_from:
+        first_day = beginning_from
+        last_day = datetime.now()
     client = WebClient(token=os.environ.get("OAUTH_TOKEN"))
 
     ret = []
-    history = client.conversations_history(channel=FORUM_CHANNEL,
-                                           limit=1000,
-                                           latest=str(last_day.timestamp()),
-                                           oldest=str(first_day.timestamp()))
+    cursor = None
+    while True:
+        history = client.conversations_history(channel=FORUM_CHANNEL,
+                                               limit=1000,
+                                               latest=str(last_day.timestamp()),
+                                               oldest=str(first_day.timestamp()),
+                                               cursor=cursor)
 
-    for message in history.data.get('messages'):
-        user = message.get('username')
-        if user is None:
-            user = message.get('user')
+        if history.data.get('has_more'):
+            cursor = history.data.get('response_metadata').get('next_cursor')
+        else:
+            cursor = None
 
-        ret.append(Message(user=user,
-                           bot_id=message.get('bot_id'),
-                           reply_count=message.get('reply_count'),
-                           reply_users_count=message.get('reply_users_count'),
-                           timestamp=message.get('ts')))
+        for message in history.data.get('messages'):
+            user = message.get('username')
+            if user is None:
+                user = message.get('user')
 
-    return ret
+            ret.append(Message(user=user,
+                               bot_id=message.get('bot_id'),
+                               reply_count=message.get('reply_count'),
+                               reply_users_count=message.get('reply_users_count'),
+                               timestamp=message.get('ts')))
+
+        if not cursor:
+            return ret
 
 
 class UserMessageCount:
@@ -153,13 +166,30 @@ def convert_users_to_dataframe(users) -> pandas.DataFrame:
     return pd.DataFrame([{fn: getattr(u, fn) for fn in fields} for u in users])
 
 
+def get_message_count_by_hour_of_day(messages) -> pandas.DataFrame:
+    count_by_hour = {}
+    for message in messages:
+        hour = message.time.hour
+        if count_by_hour.get(hour):
+            count_by_hour[hour] = count_by_hour.get(hour) + 1
+        else:
+            count_by_hour[hour] = 1
+
+    return pd.DataFrame(count_by_hour.items(), columns=['Hour Eastern', 'Count'])
+
+
 if __name__ == '__main__':
-    # messages = retrieve_messages(datetime(2022, 10, 1))
+    # messages = retrieve_messages(month=datetime(2023, 4, 1))
     # data_frame = convert_messages_to_dataframe(messages)
     # print(data_frame)
     # data_frame.to_clipboard(index=False, header=False)
 
-    user_message_counts = get_user_message_counts(datetime(2022, 6, 1))
-    data_frame = convert_users_to_dataframe(user_message_counts.values())
+    # user_message_counts = get_user_message_counts(month=datetime(2022, 6, 1))
+    # data_frame = convert_users_to_dataframe(user_message_counts.values())
+    # print(data_frame)
+    # data_frame.to_clipboard(index=False)
+
+    messages = retrieve_messages(beginning_from=datetime(2023, 1, 1))
+    data_frame = get_message_count_by_hour_of_day(messages)
     print(data_frame)
     data_frame.to_clipboard(index=False)
